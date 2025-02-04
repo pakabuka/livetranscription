@@ -106,13 +106,12 @@
         <option value="sr-RS">Serbian</option>
         <option value="es-ES">Spanish</option>
         <option value="it-IT">Italian</option>
-        <!-- Add more fixed options as needed -->
       </select>
       
       <!-- Target language for translation -->
       <label for="targetLanguage">Select Target Language (for translation):</label>
       <select id="targetLanguage">
-        <!-- These values are our “base” codes; we later map them to proper codes -->
+        <!-- These are our “base” values; we later map them to codes like "ZH-CN" -->
         <option value="zh">Chinese</option>
         <option value="en">English</option>
         <option value="fr">French</option>
@@ -143,7 +142,7 @@
   </div>
 
   <script>
-    /* IMPORTANT: Run this file via a web server (not using file://) to avoid fetch/CORS issues. */
+    /* IMPORTANT: Run this file via a web server (e.g. python -m http.server 8000) to avoid CORS issues. */
 
     // Request microphone permission early.
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
@@ -208,7 +207,7 @@
       };
 
       // Mapping for target language translation codes.
-      // MyMemory requires two-letter or RFC3066-like codes.
+      // These should be in two-letter or RFC3066 form.
       const translationLangMap = {
         en: "EN",
         zh: "ZH-CN",
@@ -227,11 +226,16 @@
       let translationTimeout;
       let isTranscribing = false;
 
-      // --- Language Detection for Translation ---
-      // This function calls MyMemory with langpair=auto|EN (an arbitrary target)
-      // to extract the detected language from the response.
+      // --- Language Detection for Translation (using MyMemory API) ---
+      // Truncate text to 200 characters to avoid overly long URLs.
       function detectTranslationLanguage(text) {
-        const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) + "&langpair=auto|EN";
+        let detectText = text.trim();
+        if (detectText.length > 200) {
+          detectText = detectText.substring(0, 200);
+        }
+        // Use "auto|EN" with the optional demo parameter.
+        const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(detectText) +
+                    "&langpair=auto|EN&de=demo";
         return fetch(url)
           .then(response => {
             if (!response.ok) {
@@ -261,16 +265,14 @@
         // First, detect the source language.
         detectTranslationLanguage(text)
           .then(detectedLang => {
-            // Convert detected language to uppercase.
-            const sourceLangCode = detectedLang.toUpperCase();
+            const sourceLangCode = detectedLang.toUpperCase(); // e.g., "EN", "ZH"
             console.log("Detected language for translation:", sourceLangCode);
-            // Build target language code using our mapping.
             const targetLangCode = translationLangMap[targetLang] || targetLang.toUpperCase();
-            // Update the displayed detected source language.
+            // Update displayed detected language.
             sourceLangDisplay.textContent = languageNames[detectedLang.toLowerCase()] || sourceLangCode;
-            // Construct the MyMemory API URL.
+            // Build the translation URL.
             const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) +
-                        "&langpair=" + sourceLangCode + "|" + targetLangCode;
+                        "&langpair=" + sourceLangCode + "|" + targetLangCode + "&de=demo";
             return fetch(url);
           })
           .then(response => {
@@ -290,12 +292,17 @@
           });
       }
 
-      // --- Update Recognition Language (for Speech Recognition) ---
-      // Similar to translation detection, but we use it to update recognition.lang.
+      // --- Update Recognition Language for Speech Recognition ---
+      // We use a similar detection call (with truncated text and demo parameter).
       function maybeUpdateInputLanguage(text) {
         if (text.trim().length < 20) return;
-        console.log("Attempting auto-detection for recognition with transcript:", text);
-        const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) + "&langpair=auto|EN";
+        let detectText = text.trim();
+        if (detectText.length > 200) {
+          detectText = detectText.substring(0, 200);
+        }
+        console.log("Attempting auto-detection for recognition with transcript:", detectText);
+        const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(detectText) +
+                    "&langpair=auto|EN&de=demo";
         fetch(url)
           .then(response => {
             if (!response.ok) {
