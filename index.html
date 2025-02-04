@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Live Audio Transcription</title>
+  <title>Live Transcription with Auto Input Language Detection & Translation</title>
   <style>
     /* Professional Dark Theme (Grey & Black) */
     *, *::before, *::after {
@@ -16,7 +16,7 @@
       font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     }
     #container {
-      max-width: 800px;
+      max-width: 1100px;
       margin: 40px auto;
       background: #1e1e1e;
       border: 1px solid #333;
@@ -24,12 +24,11 @@
       padding: 20px;
       box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
     }
-    h1 {
+    h1, h2 {
       text-align: center;
-      margin-bottom: 20px;
       color: #fff;
     }
-    .controls {
+    .controls, .language-select {
       text-align: center;
       margin-bottom: 20px;
     }
@@ -50,10 +49,25 @@
       opacity: 0.5;
       cursor: not-allowed;
     }
-    /* Larger, scrollable transcript box */
-    #transcript {
+    /* Container for transcript and translation */
+    #display {
+      display: flex;
+      gap: 20px;
+      justify-content: space-between;
+      flex-wrap: wrap;
+    }
+    .display-box {
+      flex: 1;
+      min-width: 300px;
+      display: flex;
+      flex-direction: column;
+    }
+    .display-box h2 {
+      margin-bottom: 10px;
+    }
+    .text-box {
       width: 100%;
-      height: 500px; /* Increased height for more visible text */
+      height: 500px;
       padding: 15px;
       background: #000;
       border: 1px solid #444;
@@ -64,61 +78,234 @@
       overflow-y: auto;
       color: #E0E0E0;
     }
+    .language-select label {
+      margin-right: 10px;
+      font-size: 16px;
+    }
+    .language-select select {
+      padding: 5px 10px;
+      font-size: 16px;
+      border-radius: 4px;
+      border: none;
+      margin-right: 20px;
+    }
   </style>
 </head>
 <body>
   <div id="container">
-    <h1>Live Audio Transcription</h1>
+    <h1>Live Transcription with Auto Input Language Detection & Translation</h1>
+    
+    <!-- Input Language selection for speech recognition -->
+    <div class="language-select">
+      <label for="inputLanguage">Select Input Language (for transcription):</label>
+      <select id="inputLanguage">
+        <option value="auto" selected>Auto Detect</option>
+        <option value="en-US">English</option>
+        <option value="zh-CN">Chinese</option>
+        <option value="fr-FR">French</option>
+        <option value="sr-RS">Serbian</option>
+        <option value="es-ES">Spanish</option>
+        <option value="it-IT">Italian</option>
+        <!-- Add more fixed options as needed -->
+      </select>
+      
+      <!-- Target language for translation -->
+      <label for="targetLanguage">Select Target Language (for translation):</label>
+      <select id="targetLanguage">
+        <option value="zh">Chinese</option>
+        <option value="en">English</option>
+        <option value="fr">French</option>
+        <option value="sr">Serbian</option>
+        <option value="es">Spanish</option>
+        <option value="it">Italian</option>
+        <!-- Add more languages as needed -->
+      </select>
+    </div>
+    
+    <!-- Controls -->
     <div class="controls">
       <button id="startBtn">Start Transcribing</button>
       <button id="stopBtn" disabled>Stop Transcribing</button>
       <button id="downloadBtn" disabled>Download Transcript</button>
     </div>
-    <div id="transcript" placeholder="Your transcript will appear here..."></div>
+    
+    <!-- Display area for original transcript and live translation -->
+    <div id="display">
+      <div class="display-box">
+        <h2>Original Transcript</h2>
+        <div id="transcript" class="text-box" placeholder="Your transcript will appear here..."></div>
+      </div>
+      <div class="display-box">
+        <h2>Translation (<span id="targetLangDisplay"></span>)</h2>
+        <div id="translation" class="text-box" placeholder="Live translation will appear here..."></div>
+      </div>
+    </div>
   </div>
 
   <script>
-    // First, try to obtain microphone permission early using getUserMedia.
-    // This may help browsers remember the permission (especially on HTTPS/localhost).
+    // IMPORTANT: Run this file via a web server (not using file://) to avoid fetch/CORS issues.
+    
+    // Request microphone permission early.
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       navigator.mediaDevices.getUserMedia({ audio: true })
         .then(function(stream) {
-          console.log("Microphone access granted via getUserMedia.");
-          // Stop the stream immediately since we just needed to request permission.
+          console.log("Microphone access granted.");
           stream.getTracks().forEach(track => track.stop());
         })
         .catch(function(error) {
           console.error("Error obtaining microphone permission:", error);
         });
     }
-
-    // Check if SpeechRecognition is supported.
+    
+    // Check for SpeechRecognition support.
     window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
     if (!window.SpeechRecognition) {
-      alert("Sorry, your browser does not support Speech Recognition. Please try Google Chrome or a compatible browser.");
+      alert("Sorry, your browser does not support Speech Recognition. Please try a compatible browser.");
     } else {
       // Create a new SpeechRecognition instance.
       const recognition = new window.SpeechRecognition();
-      recognition.continuous = true;       // Continue recognition until explicitly stopped.
-      recognition.interimResults = true;     // Show interim (live) results.
-      recognition.lang = 'en-US';
-
-      // Get DOM elements.
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      // (If a fixed input language is chosen, we’ll set recognition.lang later.)
+      
+      // DOM elements.
       const startBtn = document.getElementById("startBtn");
       const stopBtn = document.getElementById("stopBtn");
       const downloadBtn = document.getElementById("downloadBtn");
       const transcriptDiv = document.getElementById("transcript");
-
-      // Variable to store the final transcript.
+      const translationDiv = document.getElementById("translation");
+      const inputLanguageSelect = document.getElementById("inputLanguage");
+      const targetLanguageSelect = document.getElementById("targetLanguage");
+      const targetLangDisplay = document.getElementById("targetLangDisplay");
+      const sourceLangDisplay = document.getElementById("sourceLangDisplay");
+      
+      // Mappings for display and for setting recognition language.
+      const languageNames = {
+        en: "English",
+        zh: "Chinese",
+        fr: "French",
+        sr: "Serbian",
+        es: "Spanish",
+        it: "Italian",
+        de: "German",
+        ru: "Russian",
+        ja: "Japanese",
+        ko: "Korean"
+        // Add more as needed.
+      };
+      
+      // Mapping from detected language (from the translation API) to BCP-47 codes for SpeechRecognition.
+      const recognitionLangMap = {
+        en: "en-US",
+        zh: "zh-CN",
+        fr: "fr-FR",
+        sr: "sr-RS",
+        es: "es-ES",
+        it: "it-IT",
+        de: "de-DE",
+        ru: "ru-RU",
+        ja: "ja-JP",
+        ko: "ko-KR"
+        // Add more as needed.
+      };
+      
       let finalTranscript = "";
-
-      // Flag to keep track of whether transcription is active.
+      let currentTranscriptText = "";
+      let translationTimeout;
       let isTranscribing = false;
-
-      // Update the transcript box in real time.
+      
+      // --- Functions for Translation and Language Detection ---
+      
+      // Uses LibreTranslate's detection endpoint.
+      function detectLanguage(text) {
+        return fetch("https://translate.astian.org/detect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ q: text })
+        })
+        .then(response => {
+          if (!response.ok) {
+            return response.text().then(text => { throw new Error(text) });
+          }
+          return response.json();
+        })
+        .then(data => {
+          if (data && data.length > 0) {
+            return data[0].language;  // e.g., "zh", "en", etc.
+          } else {
+            throw new Error("Language detection failed.");
+          }
+        });
+      }
+      
+      // Try to update recognition.lang if auto-detect is enabled.
+      function maybeUpdateInputLanguage(text) {
+        // Only run if there's a bit of text to work with.
+        if (text.trim().length < 20) return;
+        console.log("Attempting auto-detection with transcript:", text);
+        detectLanguage(text)
+          .then(detectedLang => {
+            console.log("Detected language code:", detectedLang);
+            const newRecLang = recognitionLangMap[detectedLang] || "en-US";
+            console.log("Current recognition.lang:", recognition.lang, "New recognition.lang:", newRecLang);
+            if (recognition.lang !== newRecLang) {
+              console.log("Auto-detect: updating recognition language to", newRecLang);
+              // Stop recognition so that onend handler will restart it with the new language.
+              recognition.stop();
+              recognition.lang = newRecLang;
+            }
+          })
+          .catch(error => {
+            console.error("Error in input language detection:", error);
+          });
+      }
+      
+      // Update translation (for the displayed text) using auto-detected source.
+      function updateTranslation(text) {
+        const targetLang = targetLanguageSelect.value;
+        if (text.trim() === "") {
+          translationDiv.innerHTML = "";
+          sourceLangDisplay.textContent = "Auto";
+          return;
+        }
+        translationDiv.innerHTML = "<em>Translating...</em>";
+        
+        // First, detect the source language (for display).
+        detectLanguage(text)
+          .then(detectedLang => {
+            sourceLangDisplay.textContent = languageNames[detectedLang] || detectedLang;
+            // Then translate using auto-detection.
+            return fetch("https://translate.astian.org/translate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                q: text,
+                source: "auto",
+                target: targetLang,
+                format: "text"
+              })
+            });
+          })
+          .then(response => {
+            if (!response.ok) {
+              return response.text().then(text => { throw new Error(text) });
+            }
+            return response.json();
+          })
+          .then(data => {
+            translationDiv.innerHTML = data.translatedText;
+            translationDiv.scrollTop = translationDiv.scrollHeight;
+          })
+          .catch(error => {
+            console.error("Translation error:", error);
+            translationDiv.innerHTML = "<em>Error in translation: " + error.message + "</em>";
+          });
+      }
+      
+      // --- Speech Recognition Event Handlers ---
+      
       recognition.onresult = function(event) {
         let interimTranscript = "";
-        // Process all the results.
         for (let i = event.resultIndex; i < event.results.length; i++) {
           if (event.results[i].isFinal) {
             finalTranscript += event.results[i][0].transcript;
@@ -126,35 +313,56 @@
             interimTranscript += event.results[i][0].transcript;
           }
         }
-        // Display final transcript along with any interim results (with lower opacity).
+        currentTranscriptText = finalTranscript + interimTranscript;
         transcriptDiv.innerHTML = finalTranscript + '<span style="opacity:0.6;">' + interimTranscript + '</span>';
-        // Auto-scroll to the bottom.
         transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+        
+        // If input language is set to auto, attempt to update recognition language.
+        if (inputLanguageSelect.value === "auto") {
+          maybeUpdateInputLanguage(currentTranscriptText);
+        }
+        
+        // Debounce translation updates.
+        clearTimeout(translationTimeout);
+        translationTimeout = setTimeout(() => {
+          updateTranslation(currentTranscriptText);
+        }, 500);
       };
-
+      
       recognition.onerror = function(event) {
         console.error("Speech recognition error:", event.error);
       };
-
-      // If the recognition service ends unexpectedly, restart it if we're still transcribing.
+      
+      // When recognition ends (whether naturally or because we stopped it to change language), restart if needed.
       recognition.onend = function() {
         if (isTranscribing) {
+          console.log("Restarting recognition with language:", recognition.lang);
           recognition.start();
         }
       };
-
-      // Start transcription.
+      
+      // --- Button Event Handlers ---
+      
       startBtn.addEventListener("click", function() {
         transcriptDiv.innerHTML = "";
+        translationDiv.innerHTML = "";
         finalTranscript = "";
+        currentTranscriptText = "";
         isTranscribing = true;
+        
+        // Set recognition language based on the input language selection.
+        if (inputLanguageSelect.value !== "auto") {
+          recognition.lang = inputLanguageSelect.value;
+        } else {
+          recognition.lang = "en-US"; // start with a default; may update after detection
+        }
+        
         recognition.start();
         startBtn.disabled = true;
         stopBtn.disabled = false;
         downloadBtn.disabled = true;
       });
-
-      // Stop transcription.
+      
       stopBtn.addEventListener("click", function() {
         isTranscribing = false;
         recognition.stop();
@@ -162,8 +370,7 @@
         stopBtn.disabled = true;
         downloadBtn.disabled = false;
       });
-
-      // Download the final transcript as a text file.
+      
       downloadBtn.addEventListener("click", function() {
         const blob = new Blob([finalTranscript], { type: "text/plain" });
         const url = window.URL.createObjectURL(blob);
@@ -175,6 +382,26 @@
         a.click();
         window.URL.revokeObjectURL(url);
       });
+      
+      // Update displayed target language when the target language selection changes.
+      targetLanguageSelect.addEventListener("change", function() {
+        const selectedOption = targetLanguageSelect.options[targetLanguageSelect.selectedIndex].text;
+        targetLangDisplay.textContent = selectedOption;
+        updateTranslation(currentTranscriptText);
+      });
+      
+      // If the input language selection changes from auto to a fixed language (or vice versa),
+      // update recognition accordingly.
+      inputLanguageSelect.addEventListener("change", function() {
+        if (inputLanguageSelect.value !== "auto") {
+          recognition.stop();
+          recognition.lang = inputLanguageSelect.value;
+        }
+      });
+      
+      // Initialize the target language display.
+      const initialTargetOption = targetLanguageSelect.options[targetLanguageSelect.selectedIndex].text;
+      targetLangDisplay.textContent = initialTargetOption;
     }
   </script>
 </body>
