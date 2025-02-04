@@ -112,13 +112,13 @@
       <!-- Target language for translation -->
       <label for="targetLanguage">Select Target Language (for translation):</label>
       <select id="targetLanguage">
+        <!-- These values are our “base” codes; we later map them to proper codes -->
         <option value="zh">Chinese</option>
         <option value="en">English</option>
         <option value="fr">French</option>
         <option value="sr">Serbian</option>
         <option value="es">Spanish</option>
         <option value="it">Italian</option>
-        <!-- Add more languages as needed -->
       </select>
     </div>
     
@@ -143,8 +143,8 @@
   </div>
 
   <script>
-    // IMPORTANT: Run this file via a web server (not using file://) to avoid fetch/CORS issues.
-    
+    /* IMPORTANT: Run this file via a web server (not using file://) to avoid fetch/CORS issues. */
+
     // Request microphone permission early.
     if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
       navigator.mediaDevices.getUserMedia({ audio: true })
@@ -156,7 +156,7 @@
           console.error("Error obtaining microphone permission:", error);
         });
     }
-    
+
     // Check for SpeechRecognition support.
     window.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition || null;
     if (!window.SpeechRecognition) {
@@ -167,7 +167,7 @@
       recognition.continuous = true;
       recognition.interimResults = true;
       // (If a fixed input language is chosen, we’ll set recognition.lang later.)
-      
+
       // DOM elements.
       const startBtn = document.getElementById("startBtn");
       const stopBtn = document.getElementById("stopBtn");
@@ -178,8 +178,8 @@
       const targetLanguageSelect = document.getElementById("targetLanguage");
       const targetLangDisplay = document.getElementById("targetLangDisplay");
       const sourceLangDisplay = document.getElementById("sourceLangDisplay");
-      
-      // Mappings for display and for setting recognition language.
+
+      // Mappings for display.
       const languageNames = {
         en: "English",
         zh: "Chinese",
@@ -191,10 +191,9 @@
         ru: "Russian",
         ja: "Japanese",
         ko: "Korean"
-        // Add more as needed.
       };
-      
-      // Mapping from detected language code (from MyMemory) to BCP-47 codes for SpeechRecognition.
+
+      // Mapping from detected language codes (from MyMemory) to BCP-47 codes for SpeechRecognition.
       const recognitionLangMap = {
         en: "en-US",
         zh: "zh-CN",
@@ -206,30 +205,74 @@
         ru: "ru-RU",
         ja: "ja-JP",
         ko: "ko-KR"
-        // Add more as needed.
       };
-      
+
+      // Mapping for target language translation codes.
+      // MyMemory requires two-letter or RFC3066-like codes.
+      const translationLangMap = {
+        en: "EN",
+        zh: "ZH-CN",
+        fr: "FR",
+        sr: "SR",
+        es: "ES",
+        it: "IT",
+        de: "DE",
+        ru: "RU",
+        ja: "JA",
+        ko: "KO"
+      };
+
       let finalTranscript = "";
       let currentTranscriptText = "";
       let translationTimeout;
       let isTranscribing = false;
-      
-      // --- Functions for Translation and Language Detection using MyMemory API ---
-      
-      // Use MyMemory API to detect language and translate in one call.
-      // (MyMemory supports auto-detection when source is set to "auto".)
+
+      // --- Language Detection for Translation ---
+      // This function calls MyMemory with langpair=auto|EN (an arbitrary target)
+      // to extract the detected language from the response.
+      function detectTranslationLanguage(text) {
+        const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) + "&langpair=auto|EN";
+        return fetch(url)
+          .then(response => {
+            if (!response.ok) {
+              return response.text().then(txt => { throw new Error(txt) });
+            }
+            return response.json();
+          })
+          .then(data => {
+            if (data.matches && data.matches.length > 0 && data.matches[0].detectedSourceLanguage) {
+              return data.matches[0].detectedSourceLanguage; // e.g., "EN", "ZH", etc.
+            } else {
+              throw new Error("Language detection failed.");
+            }
+          });
+      }
+
+      // --- Update Translation ---
       function updateTranslation(text) {
-        const targetLang = targetLanguageSelect.value;
         if (text.trim() === "") {
           translationDiv.innerHTML = "";
           sourceLangDisplay.textContent = "Auto";
           return;
         }
         translationDiv.innerHTML = "<em>Translating...</em>";
-        
-        const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) + "&langpair=auto|" + targetLang;
-        
-        fetch(url)
+        const targetLang = targetLanguageSelect.value; // e.g., "it" or "zh"
+
+        // First, detect the source language.
+        detectTranslationLanguage(text)
+          .then(detectedLang => {
+            // Convert detected language to uppercase.
+            const sourceLangCode = detectedLang.toUpperCase();
+            console.log("Detected language for translation:", sourceLangCode);
+            // Build target language code using our mapping.
+            const targetLangCode = translationLangMap[targetLang] || targetLang.toUpperCase();
+            // Update the displayed detected source language.
+            sourceLangDisplay.textContent = languageNames[detectedLang.toLowerCase()] || sourceLangCode;
+            // Construct the MyMemory API URL.
+            const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) +
+                        "&langpair=" + sourceLangCode + "|" + targetLangCode;
+            return fetch(url);
+          })
           .then(response => {
             if (!response.ok) {
               return response.text().then(txt => { throw new Error(txt) });
@@ -237,27 +280,22 @@
             return response.json();
           })
           .then(data => {
-            // MyMemory returns the translation in responseData.translatedText
-            // and the detected language (if available) in matches[0].detectedSourceLanguage.
             const translatedText = data.responseData.translatedText;
-            const detectedLang = (data.matches && data.matches.length > 0 && data.matches[0].detectedSourceLanguage) || "auto";
             translationDiv.innerHTML = translatedText;
-            sourceLangDisplay.textContent = languageNames[detectedLang] || detectedLang;
+            translationDiv.scrollTop = translationDiv.scrollHeight;
           })
           .catch(error => {
             console.error("Translation error:", error);
             translationDiv.innerHTML = "<em>Error in translation: " + error.message + "</em>";
           });
       }
-      
-      // Use MyMemory API to detect language only (for updating the SpeechRecognition language).
+
+      // --- Update Recognition Language (for Speech Recognition) ---
+      // Similar to translation detection, but we use it to update recognition.lang.
       function maybeUpdateInputLanguage(text) {
-        // Only run if there's enough text.
         if (text.trim().length < 20) return;
-        console.log("Attempting auto-detection with transcript:", text);
-        // We call MyMemory with target as English (arbitrary) since we're only interested in detection.
-        const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) + "&langpair=auto|en";
-        
+        console.log("Attempting auto-detection for recognition with transcript:", text);
+        const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) + "&langpair=auto|EN";
         fetch(url)
           .then(response => {
             if (!response.ok) {
@@ -266,12 +304,12 @@
             return response.json();
           })
           .then(data => {
-            const detectedLang = (data.matches && data.matches.length > 0 && data.matches[0].detectedSourceLanguage) || "auto";
-            console.log("Detected language code:", detectedLang);
-            const newRecLang = recognitionLangMap[detectedLang] || "en-US";
+            const detectedLang = (data.matches && data.matches.length > 0 && data.matches[0].detectedSourceLanguage) || "EN";
+            console.log("Detected language for recognition:", detectedLang);
+            const newRecLang = recognitionLangMap[detectedLang.toLowerCase()] || "en-US";
             console.log("Current recognition.lang:", recognition.lang, "New recognition.lang:", newRecLang);
             if (recognition.lang !== newRecLang) {
-              console.log("Auto-detect: updating recognition language to", newRecLang);
+              console.log("Auto-detect (recognition): updating recognition language to", newRecLang);
               recognition.stop(); // Stop so that onend will restart it.
               recognition.lang = newRecLang;
             }
@@ -280,9 +318,8 @@
             console.error("Error in input language detection:", error);
           });
       }
-      
+
       // --- Speech Recognition Event Handlers ---
-      
       recognition.onresult = function(event) {
         let interimTranscript = "";
         for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -295,52 +332,51 @@
         currentTranscriptText = finalTranscript + interimTranscript;
         transcriptDiv.innerHTML = finalTranscript + '<span style="opacity:0.6;">' + interimTranscript + '</span>';
         transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
-        
+
         // If input language is set to auto, attempt to update recognition language.
         if (inputLanguageSelect.value === "auto") {
           maybeUpdateInputLanguage(currentTranscriptText);
         }
-        
+
         // Debounce translation updates.
         clearTimeout(translationTimeout);
         translationTimeout = setTimeout(() => {
           updateTranslation(currentTranscriptText);
         }, 500);
       };
-      
+
       recognition.onerror = function(event) {
         console.error("Speech recognition error:", event.error);
       };
-      
+
       recognition.onend = function() {
         if (isTranscribing) {
           console.log("Restarting recognition with language:", recognition.lang);
           recognition.start();
         }
       };
-      
+
       // --- Button Event Handlers ---
-      
       startBtn.addEventListener("click", function() {
         transcriptDiv.innerHTML = "";
         translationDiv.innerHTML = "";
         finalTranscript = "";
         currentTranscriptText = "";
         isTranscribing = true;
-        
+
         // Set recognition language based on the input language selection.
         if (inputLanguageSelect.value !== "auto") {
           recognition.lang = inputLanguageSelect.value;
         } else {
           recognition.lang = "en-US"; // start with a default; may update after detection.
         }
-        
+
         recognition.start();
         startBtn.disabled = true;
         stopBtn.disabled = false;
         downloadBtn.disabled = true;
       });
-      
+
       stopBtn.addEventListener("click", function() {
         isTranscribing = false;
         recognition.stop();
@@ -348,7 +384,7 @@
         stopBtn.disabled = true;
         downloadBtn.disabled = false;
       });
-      
+
       downloadBtn.addEventListener("click", function() {
         const blob = new Blob([finalTranscript], { type: "text/plain" });
         const url = window.URL.createObjectURL(blob);
@@ -360,23 +396,22 @@
         a.click();
         window.URL.revokeObjectURL(url);
       });
-      
+
       // Update displayed target language when the target language selection changes.
       targetLanguageSelect.addEventListener("change", function() {
         const selectedOption = targetLanguageSelect.options[targetLanguageSelect.selectedIndex].text;
         targetLangDisplay.textContent = selectedOption;
         updateTranslation(currentTranscriptText);
       });
-      
-      // When the input language selection changes from auto to a fixed language (or vice versa),
-      // update recognition accordingly.
+
+      // When the input language selection changes (from auto to a fixed language or vice versa), update recognition accordingly.
       inputLanguageSelect.addEventListener("change", function() {
         if (inputLanguageSelect.value !== "auto") {
           recognition.stop();
           recognition.lang = inputLanguageSelect.value;
         }
       });
-      
+
       // Initialize the target language display.
       const initialTargetOption = targetLanguageSelect.options[targetLanguageSelect.selectedIndex].text;
       targetLangDisplay.textContent = initialTargetOption;
