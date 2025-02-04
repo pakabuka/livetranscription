@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Live Transcription with Auto Input Language Detection & Translation</title>
+  <title>Live Transcription with Auto Language Detection & Translation (MyMemory API)</title>
   <style>
     /* Professional Dark Theme (Grey & Black) */
     *, *::before, *::after {
@@ -93,7 +93,7 @@
 </head>
 <body>
   <div id="container">
-    <h1>Live Transcription with Auto Input Language Detection & Translation</h1>
+    <h1>Live Transcription with Auto Language Detection & Translation</h1>
     
     <!-- Input Language selection for speech recognition -->
     <div class="language-select">
@@ -136,7 +136,7 @@
         <div id="transcript" class="text-box" placeholder="Your transcript will appear here..."></div>
       </div>
       <div class="display-box">
-        <h2>Translation (<span id="targetLangDisplay"></span>)</h2>
+        <h2>Translation (<span id="targetLangDisplay"></span> – from <span id="sourceLangDisplay">Auto</span>)</h2>
         <div id="translation" class="text-box" placeholder="Live translation will appear here..."></div>
       </div>
     </div>
@@ -194,7 +194,7 @@
         // Add more as needed.
       };
       
-      // Mapping from detected language (from the translation API) to BCP-47 codes for SpeechRecognition.
+      // Mapping from detected language code (from MyMemory) to BCP-47 codes for SpeechRecognition.
       const recognitionLangMap = {
         en: "en-US",
         zh: "zh-CN",
@@ -214,53 +214,10 @@
       let translationTimeout;
       let isTranscribing = false;
       
-      // --- Functions for Translation and Language Detection ---
+      // --- Functions for Translation and Language Detection using MyMemory API ---
       
-      // Uses LibreTranslate's detection endpoint.
-      function detectLanguage(text) {
-        return fetch("https://translate.astian.org/detect", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ q: text })
-        })
-        .then(response => {
-          if (!response.ok) {
-            return response.text().then(text => { throw new Error(text) });
-          }
-          return response.json();
-        })
-        .then(data => {
-          if (data && data.length > 0) {
-            return data[0].language;  // e.g., "zh", "en", etc.
-          } else {
-            throw new Error("Language detection failed.");
-          }
-        });
-      }
-      
-      // Try to update recognition.lang if auto-detect is enabled.
-      function maybeUpdateInputLanguage(text) {
-        // Only run if there's a bit of text to work with.
-        if (text.trim().length < 20) return;
-        console.log("Attempting auto-detection with transcript:", text);
-        detectLanguage(text)
-          .then(detectedLang => {
-            console.log("Detected language code:", detectedLang);
-            const newRecLang = recognitionLangMap[detectedLang] || "en-US";
-            console.log("Current recognition.lang:", recognition.lang, "New recognition.lang:", newRecLang);
-            if (recognition.lang !== newRecLang) {
-              console.log("Auto-detect: updating recognition language to", newRecLang);
-              // Stop recognition so that onend handler will restart it with the new language.
-              recognition.stop();
-              recognition.lang = newRecLang;
-            }
-          })
-          .catch(error => {
-            console.error("Error in input language detection:", error);
-          });
-      }
-      
-      // Update translation (for the displayed text) using auto-detected source.
+      // Use MyMemory API to detect language and translate in one call.
+      // (MyMemory supports auto-detection when source is set to "auto".)
       function updateTranslation(text) {
         const targetLang = targetLanguageSelect.value;
         if (text.trim() === "") {
@@ -270,35 +227,57 @@
         }
         translationDiv.innerHTML = "<em>Translating...</em>";
         
-        // First, detect the source language (for display).
-        detectLanguage(text)
-          .then(detectedLang => {
-            sourceLangDisplay.textContent = languageNames[detectedLang] || detectedLang;
-            // Then translate using auto-detection.
-            return fetch("https://translate.astian.org/translate", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                q: text,
-                source: "auto",
-                target: targetLang,
-                format: "text"
-              })
-            });
-          })
+        const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) + "&langpair=auto|" + targetLang;
+        
+        fetch(url)
           .then(response => {
             if (!response.ok) {
-              return response.text().then(text => { throw new Error(text) });
+              return response.text().then(txt => { throw new Error(txt) });
             }
             return response.json();
           })
           .then(data => {
-            translationDiv.innerHTML = data.translatedText;
-            translationDiv.scrollTop = translationDiv.scrollHeight;
+            // MyMemory returns the translation in responseData.translatedText
+            // and the detected language (if available) in matches[0].detectedSourceLanguage.
+            const translatedText = data.responseData.translatedText;
+            const detectedLang = (data.matches && data.matches.length > 0 && data.matches[0].detectedSourceLanguage) || "auto";
+            translationDiv.innerHTML = translatedText;
+            sourceLangDisplay.textContent = languageNames[detectedLang] || detectedLang;
           })
           .catch(error => {
             console.error("Translation error:", error);
             translationDiv.innerHTML = "<em>Error in translation: " + error.message + "</em>";
+          });
+      }
+      
+      // Use MyMemory API to detect language only (for updating the SpeechRecognition language).
+      function maybeUpdateInputLanguage(text) {
+        // Only run if there's enough text.
+        if (text.trim().length < 20) return;
+        console.log("Attempting auto-detection with transcript:", text);
+        // We call MyMemory with target as English (arbitrary) since we're only interested in detection.
+        const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) + "&langpair=auto|en";
+        
+        fetch(url)
+          .then(response => {
+            if (!response.ok) {
+              return response.text().then(txt => { throw new Error(txt) });
+            }
+            return response.json();
+          })
+          .then(data => {
+            const detectedLang = (data.matches && data.matches.length > 0 && data.matches[0].detectedSourceLanguage) || "auto";
+            console.log("Detected language code:", detectedLang);
+            const newRecLang = recognitionLangMap[detectedLang] || "en-US";
+            console.log("Current recognition.lang:", recognition.lang, "New recognition.lang:", newRecLang);
+            if (recognition.lang !== newRecLang) {
+              console.log("Auto-detect: updating recognition language to", newRecLang);
+              recognition.stop(); // Stop so that onend will restart it.
+              recognition.lang = newRecLang;
+            }
+          })
+          .catch(error => {
+            console.error("Error in input language detection:", error);
           });
       }
       
@@ -333,7 +312,6 @@
         console.error("Speech recognition error:", event.error);
       };
       
-      // When recognition ends (whether naturally or because we stopped it to change language), restart if needed.
       recognition.onend = function() {
         if (isTranscribing) {
           console.log("Restarting recognition with language:", recognition.lang);
@@ -354,7 +332,7 @@
         if (inputLanguageSelect.value !== "auto") {
           recognition.lang = inputLanguageSelect.value;
         } else {
-          recognition.lang = "en-US"; // start with a default; may update after detection
+          recognition.lang = "en-US"; // start with a default; may update after detection.
         }
         
         recognition.start();
@@ -390,7 +368,7 @@
         updateTranslation(currentTranscriptText);
       });
       
-      // If the input language selection changes from auto to a fixed language (or vice versa),
+      // When the input language selection changes from auto to a fixed language (or vice versa),
       // update recognition accordingly.
       inputLanguageSelect.addEventListener("change", function() {
         if (inputLanguageSelect.value !== "auto") {
